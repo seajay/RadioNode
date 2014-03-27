@@ -16,6 +16,7 @@
 RF24 radio(9,10);
 
 // Radio pipe addresses. Node N recieves on pipe[N].
+// Todo, deal with more than two nodes by generating the pipe number from the node ID
 const uint64_t pipes[2] = { 0xCCCCCCCC00LL, 0xCCCCCCCC01LL };
 
 // Start up as node 0 (master) ### Todo read this from EEPROM
@@ -23,9 +24,10 @@ uint8_t node_id = 0;
 
 // ### Todo calc my max payload size. 32 is the radio maximum
 #define BUF_SIZE 32
-char rx_buf[BUF_SIZE];
+uint8_t rx_buf[BUF_SIZE];
 
 enum msg_types {
+  debug,
   temp,
   time,
   button,
@@ -59,10 +61,19 @@ void setup_pipes(uint8_t node)
     radio.openWritingPipe(pipes[0]);
   }
 }
+
+void print_hex(uint8_t * data, int length)
+{
+  for (int n = 0; n < length; ++n){
+    Serial.print(data[n], HEX);
+  }
+  Serial.println();
+}
   
 
 void setup(void)
 {
+  msg = (msg_t *)&rx_buf;
   Serial.begin(57600);
   printf_begin(); // Needed to allow radio.printDetails();
 
@@ -91,10 +102,8 @@ void loop(void)
   {
     radio.read( rx_buf, sizeof(rx_buf) );
     Serial.println("Recieved message");
-    rx_buf[BUF_SIZE-1] =0; // Make sure null terminated ### don't leave this in!
-    Serial.println((char *)rx_buf);
+    print_hex(rx_buf, sizeof(rx_buf));
 
-    msg = (msg_t *)&rx_buf;
     Serial.print("src ");
     Serial.println(msg->src_node);
     Serial.print("dest ");
@@ -107,12 +116,20 @@ void loop(void)
     else {
       Serial.println(" someone else");
     }
+    
+    if (msg->msg_type == debug)
+    {
+      Serial.println("Debug");
+      Serial.println(msg->txt);
+    }
+    
   }
 
-  if ( Serial.available() > 2)
+  if ( Serial.available())
   {
     switch(Serial.read()) {
       case 'n':
+        delay(10); // Wait for the next serial character
         node_id = (char)Serial.read() - '0'; // ### Todo range check
         setup_pipes(node_id);
         Serial.print("Set node id to ");
@@ -120,17 +137,22 @@ void loop(void)
         break;
   
       case 's':  
-        // Send message      
-        
+        // Send message syntax is snxxxxxxxx s is the send message command
+        // n is the node to send to and xxxxxxxx is the message to send
         radio.stopListening(); // First, stop listening so we can talk.
+        delay(10); // Wait for the next serial character
         msg->src_node = node_id;
         msg->dest_node = (char)Serial.read() - '0';
+        msg->msg_type = debug;
         int n;
         for (n = 0; n < DATA_LEN-1; ++n){
-          msg->txt[n] = Serial.read();  // Serial.read returns -1 if there is nothing to read so this will fill with 0xFF 
+          msg->txt[n] = Serial.read();  
+          if (msg->txt[n] == -1)
+          {
+            msg->txt[n] = 0;       
+            break;
+          }
         }
-        msg->txt[n] = 0; // terminator
-
         bool ok = radio.write( msg, BUF_SIZE );
         if (ok)
           printf("ok...");
